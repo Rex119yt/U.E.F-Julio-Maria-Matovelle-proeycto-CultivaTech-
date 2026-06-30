@@ -11,12 +11,11 @@
 
 // Conexion WiFi
 const char *ssid = "Pan con queso";
-const char *password = "";
+const char *password = "mortadela";
 
 // Telegram
-#define BOT_TOKEN "8924730197:AAGIl-a-kboaMJKGDBqiQO70fMNGrNuRxhk"
-#define CHAT_ID "8960196922"
-
+#define BOT_TOKEN "8924730197:AAHDVz7CQNLxpY8qoy6i4-rYPml6ixXacCQ"
+#define CHAT_ID "-1003906379196"
 
 // Codigos IR
 #define COD1 0xBA45FF00
@@ -32,36 +31,24 @@ const char *password = "";
 
 // Pines
 #define INTERRUPTOR_PIN 18
-
-// Simulación puerta
 #define MOTOR_ABRIR 17
 #define MOTOR_CERRAR 16
-
 #define IMP1_1 26
 #define IMP1_2 27
-
-#define VENTILADOR 33 // VENTILADOR
-#define BOMBA 32      // BOMBA
-
+#define VENTILADOR 33
+#define BOMBA 32
 #define LUCES 13
 #define IR_RECEIVER_PIN 34
-// DHT22
 #define DHTPIN 4
 #define DHTTYPE DHT22
-
-// OLED
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define SCREEN_ADDRESS 0x3C
 #define OLED_RESET -1
-
-// Sensores
 #define MQ135 39
 #define MQ135D 5
-
 #define SENS_H 35
 #define LDRA 36
-
 #define IR_sensor_pin 19
 
 // Modos del sistema
@@ -71,14 +58,14 @@ enum ModoSistema
     MANUAL
 };
 
-enum TipoControl
+enum ModoAutomatico
 {
-    CONTROL_CERCANO,
-    CONTROL_LEJANO
+    AUTO_PURO,
+    AUTO_BOT
 };
 
 ModoSistema modoSistema = AUTOMATICO;
-TipoControl tipoControl = CONTROL_LEJANO;
+ModoAutomatico modoAutomatico = AUTO_PURO;
 
 // Telegram
 WiFiClientSecure client;
@@ -107,6 +94,24 @@ bool puertaAbiertaIR = false;
 unsigned long tiempoSinObstaculo = 0;
 
 bool contandoCierre = false;
+
+bool esperandoConfirmacionReinicio = false;
+
+bool ventiladorEncendido = false;
+
+const int aireEncender = 650;
+const int aireApagar = 500;
+// Banderas de alarma
+bool alarmaTemperaturaEnviada = false;
+bool alarmaAireEnviada = false;
+bool alarmaSueloEnviada = false;
+
+// DHT22 (lectura periodica)
+float temperatura = 0;
+float humedad = 0;
+
+unsigned long ultimoDHT = 0;
+const unsigned long intervaloDHT = 2000; // 2 segundos
 
 // Conexion WiFi
 void conectarWiFi()
@@ -146,25 +151,27 @@ void cerrarPuerta()
     digitalWrite(MOTOR_ABRIR, LOW);
     digitalWrite(MOTOR_CERRAR, HIGH);
 
-    delay(1000);
+    delay(900);
 
     digitalWrite(MOTOR_CERRAR, LOW);
 }
 
+// Luces (encender/apagar)
 void encenderLuces()
 {
     digitalWrite(LUCES, HIGH);
 
-    //Serial.println("LUCES ENCENDIDAS");
+    
 }
 
 void apagarLuces()
 {
     digitalWrite(LUCES, LOW);
 
-    //Serial.println("LUCES APAGADAS");
+   
 }
 
+// Techo (abrir/cerrar)
 void abrirTecho()
 {
     Serial.println("TECHO ABIERTO");
@@ -191,6 +198,7 @@ void cerrarTecho()
     digitalWrite(IMP1_2, LOW);
 }
 
+// Ventilador (encender/apagar)
 void encenderVentilador()
 {
     Serial.println("VENTILADOR ON");
@@ -200,11 +208,12 @@ void encenderVentilador()
 
 void apagarVentilador()
 {
-    //Serial.println("VENTILADOR OFF");
+    // Serial.println("VENTILADOR OFF");
 
     digitalWrite(VENTILADOR, HIGH);
 }
 
+// Bomba (encender/apagar)
 void encenderBomba()
 {
     digitalWrite(BOMBA, HIGH);
@@ -218,11 +227,10 @@ void apagarBomba()
 
     Serial.println("BOMBA APAGADA");
 }
+
 // Estado del invernadero
 String obtenerEstado()
 {
-    float humedad = dht.readHumidity();
-    float temperatura = dht.readTemperature();
 
     valorAire = analogRead(MQ135);
 
@@ -338,21 +346,22 @@ String obtenerEstado()
 
     mensaje += "\n";
 
-    if (modoSistema == AUTOMATICO)
+    if (modoSistema == MANUAL)
     {
-        mensaje += "🤖 Modo: AUTOMATICO";
+        mensaje += "🖐️ Modo: MANUAL\n";
+        mensaje += "📡 Control: IR";
     }
     else
     {
-        mensaje += "🖐️ Modo: MANUAL\n";
+        mensaje += "🤖 Modo: AUTOMATICO\n";
 
-        if (tipoControl == CONTROL_CERCANO)
+        if (modoAutomatico == AUTO_PURO)
         {
-            mensaje += "📡 Control: IR";
+            mensaje += "⚙️ Submodo: AUTO";
         }
         else
         {
-            mensaje += "🌎 Control: TELEGRAM";
+            mensaje += "🌎 Submodo: BOT";
         }
     }
 
@@ -366,8 +375,8 @@ String obtenerComandos()
 
     comandos += "COMANDOS DISPONIBLES\n\n";
     comandos += "/estado\n";
-    comandos += "/control_cercano\n";
-    comandos += "/control_lejano\n";
+    comandos += "/modo_auto\n";
+    comandos += "/modo_bot\n";
     comandos += "/abrir_puerta\n";
     comandos += "/cerrar_puerta\n";
     comandos += "/abrir_techo\n";
@@ -378,11 +387,12 @@ String obtenerComandos()
     comandos += "/apagar_bomba\n";
     comandos += "/encender_luces\n";
     comandos += "/apagar_luces\n";
+    comandos += "/reiniciar\n";
 
     return comandos;
 }
 
-// Telegram
+// Mensajes de Telegram
 void handleNewMessages(int numNewMessages)
 {
     for (int i = 0; i < numNewMessages; i++)
@@ -392,80 +402,92 @@ void handleNewMessages(int numNewMessages)
 
         Serial.println(text);
 
-        // ==========================
-        // ESTADO
-        // ==========================
-        if (text == "/estado")
+        if (text == "/reiniciar@CultivaJMMbot" || text == "/reiniciar")
+        {
+            esperandoConfirmacionReinicio = true;
+
+            bot.sendMessage(
+                chat_id,
+                "⚠️ ¿Seguro que deseas reiniciar?\n\n"
+                "Escribe:\n"
+                "/confirmar_reinicio\n\n"
+                "o\n"
+                "/cancelar_reinicio",
+                "");
+        }
+
+        if (text == "/confirmar_reinicio@CultivaJMMbot" || text == "/confirmar_reinicio" &&
+            esperandoConfirmacionReinicio)
+        {
+            bot.sendMessage(
+                chat_id,
+                "🔄 Reiniciando ESP32...",
+                "");
+
+            delay(1000);
+
+            ESP.restart();
+        }
+
+        if (text == "/cancelar_reinicio@CultivaJMMbot"|| text == "/cancelar_reinicio" &&
+            esperandoConfirmacionReinicio)
+        {
+            esperandoConfirmacionReinicio = false;
+
+            bot.sendMessage(
+                chat_id,
+                "✅ Reinicio cancelado",
+                "");
+        }
+
+        // Estado
+        if (text == "/estado@CultivaJMMbot" || text == "/estado")
         {
             bot.sendMessage(chat_id,
                             obtenerEstado(),
                             "");
         }
 
-        if (text == "/comandos")
+        if (text == "/comandos@CultivaJMMbot" || text == "/comandos")
         {
             bot.sendMessage(chat_id,
                             obtenerComandos(),
                             "");
         }
 
-        // ==========================
-        // CAMBIO DE CONTROL
-        // ==========================
-        if (text == "/control_cercano")
+        // Cambio de modo
+        if (text == "/modo_auto@CultivaJMMbot" || text == "/modo_auto")
         {
-            if (modoSistema == MANUAL)
+            if (modoSistema == AUTOMATICO)
             {
-                
-                tipoControl = CONTROL_CERCANO;
+                modoAutomatico = AUTO_PURO;
 
-                while (IrReceiver.decode())
-                {
-                    IrReceiver.resume();
-                }
-
-                bot.sendMessage(chat_id,
-                                "📡 Control cercano activado (IR)",
-                                "");
-            }
-            else
-            {
-                bot.sendMessage(chat_id,
-                                "❌ Debe estar en modo MANUAL",
-                                "");
+                bot.sendMessage(
+                    chat_id,
+                    "⚙️ Submodo AUTOMATICO activado",
+                    "");
             }
         }
 
-        if (text == "/control_lejano")
+        if (text == "/modo_bot@CultivaJMMbot" || text == "/modo_bot")
         {
-            if (modoSistema == MANUAL)
+            if (modoSistema == AUTOMATICO)
             {
-                tipoControl = CONTROL_LEJANO;
+                modoAutomatico = AUTO_BOT;
 
-                while (IrReceiver.decode())
-                {
-                    IrReceiver.resume();
-                }
-
-                bot.sendMessage(chat_id,
-                                "🌎 Control lejano activado (Telegram)",
-                                "");
-            }
-            else
-            {
-                bot.sendMessage(chat_id,
-                                "❌ Debe estar en modo MANUAL",
-                                "");
+                bot.sendMessage(
+                    chat_id,
+                    "🌎 Control por BOT activado",
+                    "");
             }
         }
 
-        // ==========================
-        // PUERTA DESDE TELEGRAM
-        // ==========================
-        if (text == "/abrir_puerta")
+
+        // Comandos de accion (requieren AUTO_BOT)
+        if (text == "/abrir_puerta@CultivaJMMbot" || text == "/abrir_puerta")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 abrirPuerta();
 
@@ -481,10 +503,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/cerrar_puerta")
+        if (text == "/cerrar_puerta@CultivaJMMbot" || text == "/cerrar puerta")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 cerrarPuerta();
 
@@ -500,10 +522,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/abrir_techo")
+        if (text == "/abrir_techo@CultivaJMMbot" || text == "/abrir_techo")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 abrirTecho();
 
@@ -521,10 +543,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/cerrar_techo")
+        if (text == "/cerrar_techo@CultivaJMMbot" || text == "/cerrar_techo")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 cerrarTecho();
 
@@ -542,10 +564,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/encender_ventilador")
+        if (text == "/encender_ventilador@CultivaJMMbot" || text == "/encender_ventilador")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 encenderVentilador();
 
@@ -563,10 +585,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/apagar_ventilador")
+        if (text == "/apagar_ventilador@CultivaJMMbot" || text == "/apagar_ventilador")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 apagarVentilador();
 
@@ -584,10 +606,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/encender_bomba")
+        if (text == "/encender_bomba@CultivaJMMbot" || text == "/encender_bomba")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 encenderBomba();
 
@@ -605,10 +627,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/apagar_bomba")
+        if (text == "/apagar_bomba@CultivaJMMbot" || text == "/apagar_bomba")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 apagarBomba();
 
@@ -626,10 +648,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/encender_luces")
+        if (text == "/encender_luces@CultivaJMMbot" || text == "/encender_luces")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 encenderLuces();
 
@@ -647,10 +669,10 @@ void handleNewMessages(int numNewMessages)
             }
         }
 
-        if (text == "/apagar_luces")
+        if (text == "/apagar_luces@CultivaJMMbot" || text == "/apagar_luces")
         {
-            if (modoSistema == MANUAL &&
-                tipoControl == CONTROL_LEJANO)
+            if (modoSistema == AUTOMATICO &&
+                modoAutomatico == AUTO_BOT)
             {
                 apagarLuces();
 
@@ -668,12 +690,29 @@ void handleNewMessages(int numNewMessages)
             }
         }
     }
+
+  
+}
+
+void actualizarDHT()
+{
+    if (millis() - ultimoDHT >= intervaloDHT)
+    {
+        ultimoDHT = millis();
+
+        float h = dht.readHumidity();
+        float t = dht.readTemperature();
+
+        if (!isnan(h) && !isnan(t))
+        {
+            humedad = h;
+            temperatura = t;
+        }
+    }
 }
 
 void funcionesAutomaticas()
 {
-    float temperatura =
-        dht.readTemperature();
 
     valorAire =
         analogRead(MQ135);
@@ -694,15 +733,20 @@ void funcionesAutomaticas()
             0,
             100);
 
-    // VENTILADOR
-    if (temperatura > 35 ||
-        valorAire > 650)
+    // VENTILADORf
+    if (!ventiladorEncendido &&
+        (temperatura > 30 || valorAire > aireEncender))
     {
         encenderVentilador();
+        ventiladorEncendido = true;
     }
-    else if (temperatura < 30 || valorAire < 350)
+
+    if (ventiladorEncendido &&
+        temperatura < 28 &&
+        valorAire < aireApagar)
     {
         apagarVentilador();
+        ventiladorEncendido = false;
     }
 
     Serial.print("ADC: ");
@@ -712,7 +756,7 @@ void funcionesAutomaticas()
     Serial.println(porcentajeHumedadSuelo);
 
     // BOMBA
-    if (porcentajeHumedadSuelo < 45 && modoSistema == AUTOMATICO )
+    if (porcentajeHumedadSuelo < 45 && modoSistema == AUTOMATICO)
     {
         encenderBomba();
     }
@@ -722,13 +766,88 @@ void funcionesAutomaticas()
     }
 }
 
+void verificarAlarmas()
+{
+
+    valorAire = analogRead(MQ135);
+
+    humedadSuelo = analogRead(SENS_H);
+
+    porcentajeHumedadSuelo =
+        map(humedadSuelo,
+            0,
+            2000,
+            0,
+            100);
+
+    porcentajeHumedadSuelo =
+        constrain(
+            porcentajeHumedadSuelo,
+            0,
+            100);
+
+    // Temperatura critica
+    if (temperatura > 28)
+    {
+        if (!alarmaTemperaturaEnviada)
+        {
+            bot.sendMessage(
+                CHAT_ID,
+                "🚨 TEMPERATURA CRITICA",
+                "");
+
+            alarmaTemperaturaEnviada = true;
+        }
+    }
+    else
+    {
+        alarmaTemperaturaEnviada = false;
+    }
+
+    // Aire muy contaminado
+    if (valorAire > 1200)
+    {
+        if (!alarmaAireEnviada)
+        {
+            bot.sendMessage(
+                CHAT_ID,
+                "🚨 AIRE MUY CONTAMINADO",
+                "");
+
+            alarmaAireEnviada = true;
+        }
+    }
+    else
+    {
+        alarmaAireEnviada = false;
+    }
+
+    // Humedad del suelo critica
+    if (porcentajeHumedadSuelo < 10)
+    {
+        if (!alarmaSueloEnviada)
+        {
+            bot.sendMessage(
+                CHAT_ID,
+                "🚨 HUMEDAD DEL SUELO CRITICAMENTE BAJA",
+                "");
+
+            alarmaSueloEnviada = true;
+        }
+    }
+    else
+    {
+        alarmaSueloEnviada = false;
+    }
+}
+
 // Configuracion inicial
 void setup()
 {
+    Serial.begin(115200);
 
-    // ==========================
-    // CAMBIO AUTOMATICO/MANUAL
-    // ==========================
+    // Cambio automatico/manual
+    pinMode(INTERRUPTOR_PIN, INPUT_PULLDOWN);
     bool interruptorActivo =
         digitalRead(INTERRUPTOR_PIN);
 
@@ -737,13 +856,12 @@ void setup()
     {
         modoSistema = MANUAL;
 
-        tipoControl = CONTROL_LEJANO;
 
         Serial.println("MANUAL");
 
         bot.sendMessage(
             CHAT_ID,
-            "🖐️ Modo MANUAL\n🌎 Control TELEGRAM",
+            "🖐️ Modo MANUAL\n📡 Control IR",
             "");
     }
 
@@ -764,10 +882,9 @@ void setup()
 
     Serial.println("Receptor IR listo");
 
-    Serial.begin(115200);
     dht.begin();
-
-    pinMode(INTERRUPTOR_PIN, INPUT_PULLDOWN);
+    temperatura = dht.readTemperature();
+    humedad = dht.readHumidity();
 
     pinMode(MOTOR_ABRIR, OUTPUT);
     pinMode(MOTOR_CERRAR, OUTPUT);
@@ -790,7 +907,7 @@ void setup()
 
     pinMode(BOMBA, OUTPUT);
 
-    digitalWrite(BOMBA,LOW);
+    digitalWrite(BOMBA, LOW);
 
     digitalWrite(IMP1_1, LOW);
     digitalWrite(IMP1_2, LOW);
@@ -831,15 +948,16 @@ void setup()
         CHAT_ID,
         obtenerComandos(),
         "");
+
+    ultimoDHT = millis();
 }
 
 // Bucle principal
 void loop()
 {
+    actualizarDHT();
 
-    // ==========================
-    // CAMBIO AUTOMATICO/MANUAL
-    // ==========================
+    // Cambio automatico/manual
     bool interruptorActivo =
         digitalRead(INTERRUPTOR_PIN);
 
@@ -848,7 +966,7 @@ void loop()
     {
         modoSistema = MANUAL;
 
-        tipoControl = CONTROL_LEJANO;
+
 
         Serial.println("MANUAL");
 
@@ -871,31 +989,23 @@ void loop()
             "");
     }
 
-    if (IrReceiver.decode())
-    {
-        Serial.print("Codigo HEX: 0x");
-        Serial.println( IrReceiver.decodedIRData.decodedRawData, HEX);
-
-        IrReceiver.resume(); // Espera siguiente codigo
-    }
 
     bool obstaculoActual =
         (digitalRead(IR_sensor_pin) == LOW);
 
-    float humedad =
-        dht.readHumidity();
 
-    float temperatura =
-        dht.readTemperature();
 
     valorAire =
         analogRead(MQ135);
+        
 
     humedadSuelo =
         analogRead(SENS_H);
 
     valorLDR =
         analogRead(LDRA);
+
+    verificarAlarmas();
 
     porcentajeLuz =
         map(valorLDR,
@@ -906,10 +1016,8 @@ void loop()
 
     display.clearDisplay();
 
-    // ==========================
-    // CONTROL AUTOMATICO LUCES
-    // ==========================
-    if (modoSistema == AUTOMATICO)
+    // Control automatico de luces
+    if (modoSistema == AUTOMATICO && modoAutomatico == AUTO_PURO)
     {
         if (porcentajeLuz > 60)
         {
@@ -937,7 +1045,8 @@ void loop()
 
     display.setCursor(0, 44);
 
-    if (modoSistema == AUTOMATICO)
+    if (modoSistema == AUTOMATICO &&
+        modoAutomatico == AUTO_PURO)
     {
         funcionesAutomaticas();
     }
@@ -946,7 +1055,7 @@ void loop()
     {
         display.print("Aire normal");
     }
-    else if (valorAire <= 400)
+    else if (valorAire <= 650)
     {
         display.print("Aire contam.");
     }
@@ -957,12 +1066,7 @@ void loop()
 
     display.display();
 
-    
-
-    // =====================================
-    // PUERTA AUTOMATICA CON SENSOR IR
-    // =====================================
-
+    // Puerta automatica con sensor IR
     if (obstaculoActual)
     {
         // Si la puerta está cerrada la abre
@@ -1005,9 +1109,7 @@ void loop()
     obstaculoAnterior =
         obstaculoActual;
 
-    // ==========================
-    // TELEGRAM
-    // ==========================
+    // Telegram
     if (millis() - lastTimeBotRan >
         botRequestDelay)
     {
@@ -1028,12 +1130,8 @@ void loop()
         lastTimeBotRan = millis();
     }
 
-    
-    // ==========================
-    // CONTROL IR
-    // ==========================
-    if (modoSistema == MANUAL &&
-        tipoControl == CONTROL_CERCANO)
+    // Control IR
+    if (modoSistema == MANUAL)
     {
         if (IrReceiver.decode())
         {
@@ -1042,46 +1140,56 @@ void loop()
 
             switch (codigo)
             {
-            case COD1: abrirPuerta();
-                
+            case COD1:
+                abrirPuerta();
+
                 break;
-            
-            case COD2: cerrarPuerta();
-                
-                break; 
-            
-            case COD3: abrirTecho();
-                
+
+            case COD2:
+                cerrarPuerta();
+
                 break;
-            
-            case COD4: cerrarTecho();
-                
+
+            case COD3:
+                abrirTecho();
+
                 break;
-            
-            case COD5:encenderVentilador();
-                
+
+            case COD4:
+                cerrarTecho();
+
                 break;
-            
-            case COD6: apagarVentilador();
-                
+
+            case COD5:
+                encenderVentilador();
+
                 break;
-            
-            case COD7: encenderBomba();
-                
+
+            case COD6:
+                apagarVentilador();
+
                 break;
-            
-            case COD8: apagarBomba();
-                
+
+            case COD7:
+                encenderBomba();
+
                 break;
-            
-            case COD9:encenderLuces();
-                
+
+            case COD8:
+                apagarBomba();
+
                 break;
-            
-            case COD10:apagarLuces();
-                
+
+            case COD9:
+                encenderLuces();
+
                 break;
-            
+
+            case COD10:
+                apagarLuces();
+
+                break;
+
             default:
                 break;
             }
@@ -1089,7 +1197,4 @@ void loop()
             IrReceiver.resume();
         }
     }
-
-
-    
 }
