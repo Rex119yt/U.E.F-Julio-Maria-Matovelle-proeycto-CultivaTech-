@@ -1,8 +1,4 @@
 #include "esp_camera.h"
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <UniversalTelegramBot.h>
-#include "config.h"
 
 // Pines
 #define PWDN_GPIO_NUM     32
@@ -22,33 +18,12 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-#define FLASH_LED_PIN 4
-
-// Variables globales
-WiFiClientSecure client;
-UniversalTelegramBot bot(botToken, client);
-
-static camera_fb_t* fb_for_telegram = nullptr;
-static size_t fb_pos = 0;
-
-bool moreData() {
-  return fb_pos < fb_for_telegram->len;
-}
-
-byte getNextByte() {
-  return fb_for_telegram->buf[fb_pos++];
-}
-
-unsigned long lastTimeBotRan;
-const unsigned long botInterval = 1000;
-
-
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
-
-  pinMode(FLASH_LED_PIN, OUTPUT);
-  digitalWrite(FLASH_LED_PIN, LOW);
+  delay(1000);
+  Serial.println();
+  Serial.println("=== TEST DE CAMARA ESP32-CAM ===");
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -75,75 +50,61 @@ void setup() {
   config.jpeg_quality = 12;
   config.fb_count = 1;
 
+  Serial.print("Inicializando camara...");
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Error camara: 0x%x\n", err);
+    Serial.println("ERROR");
+    Serial.printf("Error codigo: 0x%x\n", err);
     return;
   }
+  Serial.println("OK");
 
   sensor_t* sensor = esp_camera_sensor_get();
   sensor->set_vflip(sensor, 1);
 
-  WiFi.begin(ssid, password);
-  Serial.print("Conectando WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  printSensorInfo(sensor);
+
+  Serial.println("\nCapturando foto de prueba...");
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (fb) {
+    Serial.printf("Foto capturada: %dx%d, %d bytes\n", fb->width, fb->height, fb->len);
+    Serial.printf("Formato: %s\n", fb->format == PIXFORMAT_JPEG ? "JPEG" : "Otro");
+    esp_camera_fb_return(fb);
+    Serial.println("Foto liberada correctamente");
+  } else {
+    Serial.println("ERROR: No se pudo capturar la foto");
   }
-  Serial.println();
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
 
-  client.setInsecure();
-  bot.sendMessage(chatId, "ESP32-CAM iniciada y lista", "");
+  Serial.println("\n=== PRUEBA FINALIZADA ===");
+  Serial.println("La camara funciona correctamente");
 }
-
 
 void loop() {
-  if (millis() - lastTimeBotRan > botInterval) {
-    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-
-    while (numNewMessages) {
-      for (int i = 0; i < numNewMessages; i++) {
-        String msg_chat_id = bot.messages[i].chat_id;
-        String text = bot.messages[i].text;
-
-        if (msg_chat_id != String(chatId)) continue;
-
-        if (text == "/foto") {
-          captureAndSendPhoto();
-        }
-      }
-      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-    }
-    lastTimeBotRan = millis();
-  }
+  delay(10000);
 }
 
-// Capturar y enviar foto
-void captureAndSendPhoto() {
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (fb) esp_camera_fb_return(fb);
-  delay(50);
-
-  digitalWrite(FLASH_LED_PIN, HIGH);
-  delay(200);
-
-  fb = esp_camera_fb_get();
-
-  digitalWrite(FLASH_LED_PIN, LOW);
-
-  if (!fb) {
-    bot.sendMessage(chatId, "Error al capturar la foto", "");
-    return;
+void printSensorInfo(sensor_t* sensor) {
+  Serial.println("\n--- Informacion del sensor ---");
+  Serial.printf("Modelo: ");
+  switch (sensor->id.PID) {
+    case OV2640_PID: Serial.println("OV2640"); break;
+    case OV3660_PID: Serial.println("OV3660"); break;
+    case OV5640_PID: Serial.println("OV5640"); break;
+    default: Serial.printf("0x%x\n", sensor->id.PID); break;
   }
 
-  fb_for_telegram = fb;
-  fb_pos = 0;
-  bool ok = bot.sendPhotoByBinary(chatId, "image/jpeg", fb->len, moreData, getNextByte, nullptr, nullptr);
-  esp_camera_fb_return(fb);
-
-  if (!ok) {
-    bot.sendMessage(chatId, "Error al enviar la foto", "");
-  }
+  const char* sizes[] = {"96x96","QQVGA","QCIF","HQVGA","240x240","QVGA","CIF","HVGA",
+                          "VGA","SVGA","XGA","HD","SXGA","UXGA","FHD","QXGA"};
+  int idx = sensor->status.framesize;
+  Serial.printf("Resolucion: %s (%d)\n", idx < 16 ? sizes[idx] : "?", idx);
+  Serial.printf("Calidad JPEG: %d\n", sensor->status.quality);
+  Serial.printf("Brillo: %d\n", sensor->status.brightness);
+  Serial.printf("Contraste: %d\n", sensor->status.contrast);
+  Serial.printf("Saturacion: %d\n", sensor->status.saturation);
+  Serial.printf("AWB: %s\n", sensor->status.awb ? "ON" : "OFF");
+  Serial.printf("AEC: %s\n", sensor->status.aec ? "ON" : "OFF");
+  Serial.printf("AGC: %s\n", sensor->status.agc ? "ON" : "OFF");
+  Serial.printf("V-Flip: %s\n", sensor->status.vflip ? "ON" : "OFF");
+  Serial.printf("H-Mirror: %s\n", sensor->status.hmirror ? "ON" : "OFF");
+  Serial.println("----------------------------");
 }
